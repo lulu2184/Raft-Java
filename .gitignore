@@ -1,1 +1,5 @@
 doc/*
+.idea/*
+out/*
+*.txt
+*.iml

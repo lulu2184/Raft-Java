@@ -18,7 +18,7 @@ public class GetStateReply implements Serializable {
      */
     public boolean isLeader;
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 489186L;
 
     /**
      * GetStateReply - Construct a get state packet with given term and leader.
