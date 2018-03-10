@@ -62,6 +62,7 @@ public class RaftNode implements MessageHandling {
      */
     @Override
     public StartReply start(int command) {
+
         return new StartReply(getLastEntry().index, currentTerm, isLeader());
     }
 

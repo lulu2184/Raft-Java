@@ -1,5 +1,5 @@
+*.txt
+*.iml
 doc/*
 .idea/*
 out/*
-*.txt
-*.iml
