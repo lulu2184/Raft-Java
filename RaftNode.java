@@ -144,13 +144,7 @@ public class RaftNode implements MessageHandling {
             if (request.entries.size() == 0 && request.prevLogTerm != -1) {
                 // handle heartbeat
                 if (request.term >= currentTerm) {
-                    this.hasHeartBeat = true;
-                    if (isLeader() && this.heartBeatTimer != null) {
-                        this.heartBeatTimer.cancel();
-                        this.heartBeatTimer = null;
-                    }
-                    currentRole = NodeRole.Follower;
-
+                    changeStateToFollower();
                     updateTerm(request.term);
                     success = true;
                 }
@@ -159,6 +153,7 @@ public class RaftNode implements MessageHandling {
                 System.out.printf("Server %d at term %d receives append entry from %d at term %d. %s\n", id, currentTerm, request.leaderId, request.term, currentRole.toString());
                 success = true;
                 if (request.term >= currentTerm) {
+                    changeStateToFollower();
                     updateTerm(request.term);
                 }
 
@@ -287,6 +282,15 @@ public class RaftNode implements MessageHandling {
                 broadcastAppendEntries(Arrays.asList());
             }
         }, 0, heartBeatFreq);
+    }
+
+    private void changeStateToFollower() {
+        this.hasHeartBeat = true;
+        if (isLeader() && this.heartBeatTimer != null) {
+            this.heartBeatTimer.cancel();
+            this.heartBeatTimer = null;
+        }
+        currentRole = NodeRole.Follower;
     }
 
     private boolean broadcastAppendEntries(List<LogEntry> entries) {
