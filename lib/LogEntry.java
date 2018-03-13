@@ -24,6 +24,7 @@ public class LogEntry implements Serializable{
         int termc = Integer.compare(this.term, entry.term);
         int indexc = Integer.compare(this.index, entry.index);
         int valuec = Integer.compare(this.value, entry.value);
+        //return (termc == 0 && indexc == 0);
         return (termc == 0 && indexc == 0 && valuec == 0);
     }
 
