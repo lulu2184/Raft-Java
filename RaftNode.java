@@ -156,23 +156,37 @@ public class RaftNode implements MessageHandling {
                 }
             } else {
                 // handle append entry
-                System.out.printf("Server %d receives append entry from %d.\n", id, request.leaderId);
+                System.out.printf("Server %d at term %d receives append entry from %d at term %d. %s\n", id, currentTerm, request.leaderId, request.term, currentRole.toString());
                 success = true;
+                if (request.term >= currentTerm) {
+                    updateTerm(request.term);
+                }
+
                 if (request.term < currentTerm)
                     return new Message(MessageType.AppendEntriesReply, id, request.leaderId,
                             convertObjectToByteArray(new AppendEntriesReply(currentTerm, false)));
 
                 // conflict log
+
                 if (log.size()-1 >= request.prevLogIndex
                         && log.size() > 0
                         && request.prevLogIndex != -1
                         && (log.get(request.prevLogIndex).term != request.prevLogTerm)) {
                     // delete all the following entries
                     // TODO: next index
-                    int length = log.size();
-                    for (int i = length-1; i >= request.prevLogIndex; --i) {
+                    System.out.println("Conflict logs！！！！！！");
+                    int length = Math.min(log.size(), request.entries.size());
+                    int same = 0;
+                    for (int i = 0 ; i < length; ++i) {
+                        if (request.entries.get(i).equals(log.get(i)))
+                            same = i;
+                        else
+                            break;
+                    }
+                    for (int i = same + 1; i < log.size(); ++i) {
                         log.remove(i);
                     }
+                    commitIndex = Integer.min(request.leaderCommit, log.size());
                     System.out.printf("Conflict logs at index %d\n", request.prevLogIndex);
                     // return false
 //                    return new Message(MessageType.AppendEntriesReply, id, request.leaderId,
@@ -213,24 +227,6 @@ public class RaftNode implements MessageHandling {
                 else
                     System.out.printf("Server %d does not approve leader %d.\n", id, request.leaderId);
 
-
-//                if (request.entries.size() > 0) {
-//                    // do not have the index
-//                    if (log.size()-1 < request.prevLogIndex) {
-//                        success = false;
-//                    } else {
-//
-//                    }
-//
-//                    if (success)
-//                        System.out.printf("Server %d approves leader %d.\n", id, request.leaderId);
-//                    else
-//                        System.out.printf("Server %d does not approve leader %d.\n", id, request.leaderId);
-//                    // refresh commit index
-//                    if (request.leaderCommit > commitIndex) {
-//                        commitIndex = Integer.min(request.leaderCommit, log.size());
-//                    }
-//                }
             }
 
             return new Message(MessageType.AppendEntriesReply, id, request.leaderId,
@@ -330,7 +326,7 @@ public class RaftNode implements MessageHandling {
         if (alive_peers.size() < num_peers/2) {
             return false;
         } else {
-            if (votes > num_peers/2) {
+            if (votes+1 > num_peers/2) {
                 commitIndex = log.size();
                 System.out.printf("Leader %d is approved by majority at term %d\n", id, currentTerm);
                 if(log.size() < commitIndex) {
