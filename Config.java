@@ -283,7 +283,7 @@ public class Config extends UnicastRemoteObject implements Remote {
                 while( (System.currentTimeMillis() - t1 ) < 2000 ) { /* Wait for 2 seconds before giving up. */
 
                     NCommitted reply = this.nCommitted(index);
-                    System.out.printf("nd=%d, cmd=%d\n", reply.nd, reply.cmd);
+                    System.out.printf("nd=%d, cmd=%d, index=%d\n", reply.nd, reply.cmd, index);
                     if( (reply.nd > 0) && (reply.nd >= expectedServers) ) {
                         if( reply.cmd == cmd) {
                             /* It is the command that we submitted. */

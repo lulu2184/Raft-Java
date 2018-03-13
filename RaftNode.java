@@ -69,24 +69,31 @@ public class RaftNode implements MessageHandling {
             log.add(entry);
             System.out.printf("Server %d add %s from client, %s\n", id, entry.toString(), currentRole.toString());
             System.out.printf("%d come from leader %d at term %d\n", command, id, currentTerm);
-            broadcastAppendEntriesExceptHeartBeats();
-            broadcastAppendEntriesExceptHeartBeats();
-
-            try {
-                lib.applyChannel(new ApplyMsg(id, Math.max(commitIndex, 0), log.get(Math.max(commitIndex-1,0)).value, false, null));
-                System.out.printf("Server %d commits log at %d\n", id, Math.max(commitIndex-1, 0));
-            } catch (RemoteException e) {
-                e.printStackTrace();
+            int prevCommit = commitIndex+1;
+            boolean appendResult = broadcastAppendEntriesExceptHeartBeats();
+            if (appendResult) {
+                broadcastAppendEntriesExceptHeartBeats();
+                try {
+                    for (int i = prevCommit; i <= commitIndex; ++i) {
+                        lib.applyChannel(new ApplyMsg(id, Math.max(i, 0), log.get(Math.max(i-1,0)).value, false, null));
+                        System.out.printf("Server %d commits log at %d\n", id, Math.max(commitIndex-1, 0));
+                    }
+                } catch (RemoteException e) {
+                    e.printStackTrace();
+                }
+                return new StartReply(Math.max(commitIndex,0), currentTerm, isLeader());
+            } else {
+                return new StartReply(Math.max(commitIndex+1,0), currentTerm, isLeader());
             }
 
-            return new StartReply(Math.max(commitIndex,0), currentTerm, isLeader());
         }
         return new StartReply(getLastEntry().index, currentTerm, isLeader());
     }
 
-    public void broadcastAppendEntriesExceptHeartBeats() {
+    public boolean broadcastAppendEntriesExceptHeartBeats() {
         List<LogEntry> appendEntries = new ArrayList<>();
-        for (int i = 0; i < commitIndex; ++i) {
+        for (int i = 0; i < log.size(); ++i) {
+        //for (int i = 0; i < commitIndex; ++i) {
             appendEntries.add(log.get(i));
             System.out.println("current commitIndex: " + commitIndex);
             System.out.println("append entry: " + log.get(i));
@@ -94,7 +101,7 @@ public class RaftNode implements MessageHandling {
         if (appendEntries.size() == 0) {
             appendEntries.add(new LogEntry(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE));
         }
-        broadcastAppendEntries(appendEntries);
+        return broadcastAppendEntries(appendEntries);
     }
 
     @Override
@@ -286,35 +293,53 @@ public class RaftNode implements MessageHandling {
         }, 0, heartBeatFreq);
     }
 
-    private void broadcastAppendEntries(List<LogEntry> entries) {
+    private boolean broadcastAppendEntries(List<LogEntry> entries) {
         LogEntry prevLogEntry = getPrevLogEntry();
         AppendEntriesArg appendEntriesArg = new AppendEntriesArg(currentTerm, id, prevLogEntry.index,
                 prevLogEntry.term, entries, commitIndex);
         byte[] messageBody = convertObjectToByteArray(appendEntriesArg);
         int votes = 0;
+        Set<Integer> alive_peers = new HashSet<>();
+        for (int i = 0; i < num_peers; i++) {
+            alive_peers.add(i);
+        }
         for (int i = 0; i < num_peers; i++) {
             if (i == id) continue;
             try {
                 // handle reply message
                 Message reply = lib.sendMessage(new Message(MessageType.AppendEntriesArgs, id, i, messageBody));
-                if (entries.size() > 0) {
-                    if (reply.getType().equals(MessageType.AppendEntriesReply)) {
-                        AppendEntriesReply aer = (AppendEntriesReply) convertByteArrayToObject(reply.getBody());
-                        if (aer.term == currentTerm && aer.success) {
-                            votes ++;
+                if (reply == null) {
+                    alive_peers.remove(Integer.valueOf(i));
+                } else {
+                    alive_peers.add(Integer.valueOf(i));
+                    if (entries.size() > 0) {
+                        if (reply.getType().equals(MessageType.AppendEntriesReply)) {
+                            AppendEntriesReply aer = (AppendEntriesReply) convertByteArrayToObject(reply.getBody());
+                            if (aer.term == currentTerm && aer.success) {
+                                votes ++;
+                            }
                         }
                     }
                 }
+
             } catch (RemoteException e) {
                 System.err.printf("Server %d fails to send AppendEntries to server %d.\n", id, i);
             }
         }
-        if (votes > num_peers/2) {
-            commitIndex = log.size();
-            System.out.printf("Leader %d is approved by majority at term %d\n", id, currentTerm);
-            if(log.size() < commitIndex) {
-                System.out.println("term: " + currentTerm + " " + log.size() + " " + commitIndex + " " + currentRole.toString());
-            }
+
+        if (alive_peers.size() < num_peers/2) {
+            return false;
+        } else {
+            if (votes > num_peers/2) {
+                commitIndex = log.size();
+                System.out.printf("Leader %d is approved by majority at term %d\n", id, currentTerm);
+                if(log.size() < commitIndex) {
+                    System.out.println("term: " + currentTerm + " " + log.size() + " " + commitIndex + " " + currentRole.toString());
+                }
+                return true;
+            } else
+                return false;
+
         }
 
     }
