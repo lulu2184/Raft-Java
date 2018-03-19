@@ -5,7 +5,7 @@ import java.rmi.RemoteException;
 import java.util.*;
 
 public class RaftNode implements MessageHandling {
-    private static int heartBeatFreq = 10;
+    private static int heartBeatFreq = 60;
     private static int MAX_ELECTION_TIMEOUT = 300;
     private static boolean debug = false;
     private static boolean append_debug = false;
@@ -40,7 +40,7 @@ public class RaftNode implements MessageHandling {
         this.log = new ArrayList<>();
         this.currentRole = NodeRole.Follower;
         this.commitIndex = 0;
-        this.votedFor = null;
+        this.votedFor = -1;
         this.currentTerm = 0;
         this.hasHeartBeat = false;
 
@@ -171,21 +171,24 @@ public class RaftNode implements MessageHandling {
     private Message responseRequestVoteArgs(Message message) {
         RequestVoteArgs request = (RequestVoteArgs) convertByteArrayToObject(message.getBody());
         boolean granted = false;
-        if (debug)
-            System.out.printf("Server %d receives RequestVote from %d. at term %d\n", id, request.candidateId, currentTerm);
         if (request.term >= currentTerm) {
             updateTerm(request.term);
-            if (votedFor == null || votedFor.equals(request.candidateId)) {
-                // TODO: check whether the candidate is more up-to-date
-                LogEntry lastEntry = getLastEntry();
-                if (request.lastLogTerm == lastEntry.term && request.lastLogIndex >= lastEntry.index) {
-                    granted = true;
-                } else {
-                    if (request.lastLogTerm > lastEntry.term)
+            if (debug)
+                System.out.printf("Server %d receives RequestVote from %d. at term %d\n", id, request.candidateId, currentTerm);
+            synchronized (votedFor) {
+                if (votedFor < 0) {
+                    // TODO: check whether the candidate is more up-to-date
+                    LogEntry lastEntry = getLastEntry();
+                    if ((request.lastLogTerm == lastEntry.term && request.lastLogIndex >= lastEntry.index)
+                            || request.lastLogTerm > lastEntry.term) {
                         granted = true;
+                        votedFor = request.candidateId;
+                    }
                 }
             }
         }
+        if (debug && granted)
+            System.out.printf("Server %d gives vote to server %d. at term %d\n", id, request.candidateId, currentTerm);
         return new Message(MessageType.RequestVoteReply, id, request.candidateId,
                 convertObjectToByteArray(new RequestVoteReply(currentTerm, granted)));
     }
@@ -197,11 +200,11 @@ public class RaftNode implements MessageHandling {
             if (appendEntriesArgs.term < currentTerm) {
                 success = false;
             } else if (conflictPrevLog(appendEntriesArgs)) {
-                if (append_debug) {
-                    System.out.printf("Conflict on server %d. prevLogIndex = %d, log.size = %d prevLogTerm = %d\n",
-                            id, appendEntriesArgs.prevLogIndex, log.size(), appendEntriesArgs.prevLogTerm);
-                    System.out.printf("[conflict] Server %d log: %s\n", id, log.toString());
-                }
+//                if (append_debug) {
+//                    System.out.printf("Conflict on server %d. prevLogIndex = %d, log.size = %d prevLogTerm = %d\n",
+//                            id, appendEntriesArgs.prevLogIndex, log.size(), appendEntriesArgs.prevLogTerm);
+//                    System.out.printf("[conflict] Server %d log: %s\n", id, log.toString());
+//                }
                 success = false;
                 receiveHeartBeat();
                 updateTerm(appendEntriesArgs.term);
@@ -347,11 +350,11 @@ public class RaftNode implements MessageHandling {
     }
 
     private void updateTerm(int term) {
-        synchronized (log) {
+        synchronized (votedFor) {
             if (term > currentTerm) {
                 changeStateToFollower();
                 currentTerm = term;
-                votedFor = null;
+                votedFor = -1;
             }
         }
     }
@@ -450,16 +453,21 @@ public class RaftNode implements MessageHandling {
     private boolean broadcastAppendEntriesInParallel() {
         int currentIndex = getLastEntry().index;
         SuccessListener successListener = new SuccessListener(currentIndex);
+        List<LogEntry> logCopy = new ArrayList<>(log);
 
+        for (SendAppendThread thread : sendThreadList) {
+            thread.stopThread();
+        }
+        sendThreadList = new ArrayList<>();
         for (int i = 0; i < num_peers; i++) {
             if (i == id) continue;
-            SendAppendThread sendThread = new SendAppendThread(i, currentIndex, successListener);
+            SendAppendThread sendThread = new SendAppendThread(i, currentIndex, successListener, logCopy);
             (new Thread(sendThread)).start();
             sendThreadList.add(sendThread);
         }
         long waitStartTime = System.currentTimeMillis();
         /* Blocking until the log is committed or timeout. */
-        while (!successListener.isCommitted() && (System.currentTimeMillis() - waitStartTime) < MAX_ELECTION_TIMEOUT);
+        while (!successListener.isCommitted && (System.currentTimeMillis() - waitStartTime) < MAX_ELECTION_TIMEOUT);
         if (append_debug)
             System.out.printf("Server %d(Leader) committed.\n", id);
         if (!successListener.isCommitted()) {
@@ -516,8 +524,10 @@ public class RaftNode implements MessageHandling {
         currentTerm++;
         if (debug)
             System.out.printf("Server %d starts a new election at term %d (now: %s).\n", id, currentTerm, currentRole);
-        votedFor = id;
-        currentRole = NodeRole.Candidate;
+        synchronized (votedFor) {
+            votedFor = id;
+            currentRole = NodeRole.Candidate;
+        }
 
         // send out requestVote msg
         LogEntry lastLogEntry = getLastEntry();
@@ -533,6 +543,10 @@ public class RaftNode implements MessageHandling {
                 Message response = lib.sendMessage(new Message(MessageType.RequestVoteArgs, id, i, payload));
                 if (response != null) {
                     RequestVoteReply reply = (RequestVoteReply) convertByteArrayToObject(response.getBody());
+                    if (reply.term > currentTerm) {
+                        updateTerm(reply.term);
+                        break;
+                    }
                     if (reply.voteGranted) votesCounter++;
                 }
             } catch (RemoteException e){
@@ -590,20 +604,27 @@ public class RaftNode implements MessageHandling {
         private boolean isStopped;
         private SuccessListener successListener;
         private int counter = 0;
+        private List<LogEntry> logCopy;
 
-        private SendAppendThread(int followerId, int currentIndex, SuccessListener successListener) {
+        private SendAppendThread(int followerId, int currentIndex, SuccessListener successListener,
+                                 List<LogEntry> logCopy) {
             this.followerId = followerId;
             this.currentIndex = currentIndex;
             this.isStopped = false;
             this.successListener = successListener;
+            this.logCopy = logCopy;
         }
 
         @Override
         public void run() {
+            nextIndex[this.followerId] = Integer.min(nextIndex[this.followerId], currentIndex);
             while (!this.isStopped) {
                 List<LogEntry> entries = new ArrayList<>();
-                entries.addAll(log.subList(Integer.max(0, nextIndex[this.followerId] - 1), currentIndex));
-                int prevLogTerm = (nextIndex[this.followerId] >= 2) ? log.get(nextIndex[this.followerId] - 2).term : 0;
+//                if (append_debug)
+//                    System.out.printf("Follower server %d's nextIndex on server %d is %d [currentIndex=%d] [logsize=%d] %s\n",
+//                            this.followerId, id, nextIndex[this.followerId], currentIndex, logCopy.size(), logCopy.toString());
+                entries.addAll(logCopy.subList(Integer.max(0, nextIndex[this.followerId] - 1), currentIndex));
+                int prevLogTerm = (nextIndex[this.followerId] >= 2) ? logCopy.get(nextIndex[this.followerId] - 2).term : 0;
                 AppendEntriesArgs appendEntriesArgs = new AppendEntriesArgs(currentTerm, id,
                         nextIndex[this.followerId] - 1, prevLogTerm, entries, commitIndex);
                 Message message = new Message(
@@ -616,7 +637,7 @@ public class RaftNode implements MessageHandling {
 //                                reply.success, this.followerId, reply.term);
                         if (reply.success) {
                             if (append_debug)
-                                System.out.printf("Server %d receives sucess from server %d at term %d (%d times).\n",
+                                System.out.printf("Server %d receives success from server %d at term %d (%d times).\n",
                                         id, this.followerId, reply.term, ++counter);
                             successListener.onSuccess();
                             break;
@@ -632,8 +653,12 @@ public class RaftNode implements MessageHandling {
                     /* Ignore, and continue trying. */
                     e.printStackTrace();
                 }
+//                try {
+//                    Thread.sleep(300);
+//                } catch (InterruptedException e) {};
             }
             this.isStopped = true;
+            nextIndex[this.followerId]++;
         }
 
         private void stopThread() {
