@@ -76,26 +76,8 @@ public class RaftNode implements MessageHandling {
                 if (append_debug)
                     System.out.printf("Server %d add %s from client, %s\n", id, entry.toString(), currentRole.toString());
 
-                int prevCommit = commitIndex;
-                boolean success = broadcastAppendEntriesInParallel();
-                if (success && isLeader()) {
-                    for (int i = prevCommit; i < commitIndex; ++i) {
-                        try {
-                            lib.applyChannel(new ApplyMsg(id, log.get(i).index,
-                                    log.get(i).value, false, null));
-                            if (append_debug)
-                                System.out.printf("Server %d commits log at %d (value = %d)[Leader]\n", id, log.get(i).index, log.get(i).value);
-                        } catch (RemoteException e) {
-                            e.printStackTrace();
-                        }
-                    }
-                    return new StartReply(commitIndex, currentTerm, isLeader());
-                } else {
-                    log.remove(log.size() - 1);
-                    if (append_debug)
-                        System.out.printf("Log at server %d: %s\n", id, log.toString());
-                    return new StartReply(index + 1, currentTerm, isLeader());
-                }
+                broadcastAppendEntriesInParallel();
+                return new StartReply(index + 1, currentTerm, isLeader());
             } else {
                 return new StartReply(getLastEntry().index, currentTerm, isLeader());
             }
@@ -416,7 +398,6 @@ public class RaftNode implements MessageHandling {
     }
 
     private void changeStateToFollower() {
-        this.hasHeartBeat = true;
         if (isLeader() && this.heartBeatTimer != null) {
             this.heartBeatTimer.cancel();
             this.heartBeatTimer = null;
@@ -450,7 +431,7 @@ public class RaftNode implements MessageHandling {
         }
     }
 
-    private boolean broadcastAppendEntriesInParallel() {
+    private void broadcastAppendEntriesInParallel() {
         int currentIndex = getLastEntry().index;
         SuccessListener successListener = new SuccessListener(currentIndex);
         List<LogEntry> logCopy = new ArrayList<>(log);
@@ -475,9 +456,6 @@ public class RaftNode implements MessageHandling {
                 thread.stopThread();
             }
             sendThreadList = new ArrayList<>();
-            return false;
-        } else {
-            return true;
         }
     }
 
@@ -640,7 +618,8 @@ public class RaftNode implements MessageHandling {
                                 System.out.printf("Server %d receives success from server %d at term %d (%d times).\n",
                                         id, this.followerId, reply.term, ++counter);
                             successListener.onSuccess();
-                            break;
+                            nextIndex[this.followerId]++;
+                            return;
                         } else {
                             if (reply.term > currentTerm) {
                                 updateTerm(reply.term);
@@ -653,12 +632,7 @@ public class RaftNode implements MessageHandling {
                     /* Ignore, and continue trying. */
                     e.printStackTrace();
                 }
-//                try {
-//                    Thread.sleep(300);
-//                } catch (InterruptedException e) {};
             }
-            this.isStopped = true;
-            nextIndex[this.followerId]++;
         }
 
         private void stopThread() {
@@ -670,10 +644,12 @@ public class RaftNode implements MessageHandling {
         private int index;
         private int successCounter = 1;
         private boolean isCommitted;
+        private int prevCommit;
 
         private SuccessListener(int index) {
             this.index = index;
             this.isCommitted = false;
+            this.prevCommit = commitIndex;
         }
 
         private void onSuccess() {
@@ -683,6 +659,16 @@ public class RaftNode implements MessageHandling {
                 if (successCounter > num_peers / 2) {
                     commitIndex = index;
                     isCommitted = true;
+                    for (int i = prevCommit; i < commitIndex; ++i) {
+                        try {
+                            lib.applyChannel(new ApplyMsg(id, log.get(i).index,
+                                    log.get(i).value, false, null));
+                            if (append_debug)
+                                System.out.printf("Server %d commits log at %d (value = %d)[Leader]\n", id, log.get(i).index, log.get(i).value);
+                        } catch (RemoteException e) {
+                            e.printStackTrace();
+                        }
+                    }
                 }
             }
         }
