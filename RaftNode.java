@@ -6,11 +6,12 @@ import java.util.*;
 
 public class RaftNode implements MessageHandling {
     private static int heartBeatFreq = 100;
-    private static int MAX_ELECTION_TIMEOUT = 400;
-    private static int MIN_ELECTION_TIMEOUT = 200;
-    private static boolean debug = false;
-    private static boolean append_debug = false;
+    private static int MAX_ELECTION_TIMEOUT = 600;
+    private static int MIN_ELECTION_TIMEOUT = 300;
+    private static boolean debug = true;
+    private static boolean append_debug = true;
     private static boolean count_debug = false;
+    private static Random random = new Random();
 
     private int id;
     private static TransportLib lib;
@@ -49,14 +50,16 @@ public class RaftNode implements MessageHandling {
         lib = new TransportLib(port, id, this);
 
         this.electionTimeout =
-                (new Random()).nextInt((MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT)) + MIN_ELECTION_TIMEOUT;
+                random.nextInt((MAX_ELECTION_TIMEOUT - MIN_ELECTION_TIMEOUT)) + MIN_ELECTION_TIMEOUT;
+        if (debug)
+            System.out.printf("Server %d's election timeout is %d ms.\n", id, electionTimeout);
 
         this.electionTimer = new Timer();
         this.electionTimer.schedule(new TimerTask() {
             @Override
             public void run() {
-                if (debug)
-                    System.out.printf("Server %d check heartbeat (%s)\n", id, currentRole.toString());
+//                if (debug)
+//                    System.out.printf("Server %d check heartbeat (%s)\n", id, currentRole.toString());
                 if (isLeader() || hasHeartBeat) {
                     resetHeartBeat();
                 } else {
