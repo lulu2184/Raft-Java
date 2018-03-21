@@ -385,6 +385,7 @@ public class RaftTest {
             total1 += cfg.rpcCount(i);
         }
 
+        System.err.println(total1);
         if( (total1 > 30) || (total1 < 1)) {
             System.err.println("Too many or too few RPC to elect leader");
             cfg.cleanup();
@@ -480,6 +481,7 @@ public class RaftTest {
                     continue loop;
                 }
 
+                System.err.printf("%d\n", (total2 - total1));
                 if( (total2 - total1) > ((iters + 4)*3)) {
                     System.err.println("Too many RPCs");
                     cfg.cleanup();
