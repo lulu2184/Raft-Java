@@ -5,9 +5,9 @@ import java.rmi.RemoteException;
 import java.util.*;
 
 public class RaftNode implements MessageHandling {
-    private static int heartBeatFreq = 700;
-    private static int MAX_ELECTION_TIMEOUT = 1000;
-    private static int MIN_ELECTION_TIMEOUT = 800;
+    private static int heartBeatFreq = 100;
+    private static int MAX_ELECTION_TIMEOUT = 400;
+    private static int MIN_ELECTION_TIMEOUT = 200;
     private static boolean debug = false;
     private static boolean append_debug = true;
     private static boolean count_debug = false;
@@ -464,7 +464,7 @@ public class RaftNode implements MessageHandling {
         }
         long waitStartTime = System.currentTimeMillis();
         /* Blocking until the log is committed or timeout. */
-        while (!successListener.isCommitted && (System.currentTimeMillis() - waitStartTime) < MAX_ELECTION_TIMEOUT);
+        while (!successListener.isCommitted() && (System.currentTimeMillis() - waitStartTime) < MAX_ELECTION_TIMEOUT);
         if (append_debug)
             System.out.printf("Server %d(Leader) committed.\n", id);
         if (!successListener.isCommitted()) {
