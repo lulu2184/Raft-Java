@@ -9,7 +9,7 @@ public class RaftNode implements MessageHandling {
     private static int MAX_ELECTION_TIMEOUT = 400;
     private static int MIN_ELECTION_TIMEOUT = 200;
     private static boolean debug = false;
-    private static boolean append_debug = true;
+    private static boolean append_debug = false;
     private static boolean count_debug = false;
 
     private int id;
