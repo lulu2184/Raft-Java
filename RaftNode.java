@@ -54,12 +54,11 @@ public class RaftNode implements MessageHandling {
         if (debug)
             System.out.printf("Server %d's election timeout is %d ms.\n", id, electionTimeout);
 
+        /* Set up timer to check heartbeat periodically. */
         this.electionTimer = new Timer();
         this.electionTimer.schedule(new TimerTask() {
             @Override
             public void run() {
-//                if (debug)
-//                    System.out.printf("Server %d check heartbeat (%s)\n", id, currentRole.toString());
                 if (isLeader() || hasHeartBeat) {
                     resetHeartBeat();
                 } else {
@@ -125,7 +124,6 @@ public class RaftNode implements MessageHandling {
                 System.out.printf("Server %d receives RequestVote from %d. at term %d\n", id, request.candidateId, currentTerm);
             synchronized (votedFor) {
                 if (votedFor < 0) {
-                    // TODO: check whether the candidate is more up-to-date
                     LogEntry lastEntry = getLastEntry();
                     if ((request.lastLogTerm == lastEntry.term && request.lastLogIndex >= lastEntry.index)
                             || request.lastLogTerm > lastEntry.term) {
@@ -145,6 +143,8 @@ public class RaftNode implements MessageHandling {
         synchronized (log) {
             AppendEntriesArgs appendEntriesArgs = (AppendEntriesArgs) convertByteArrayToObject(message.getBody());
             boolean success;
+
+            /* debug message */
             if (count_debug) {
                 if (appendEntriesArgs.entries.size() == 0) {
                     System.out.printf("Server %d receives heartbeat from %d.\n", id, appendEntriesArgs.leaderId);
@@ -154,14 +154,10 @@ public class RaftNode implements MessageHandling {
                             appendEntriesArgs.prevLogIndex + 1, currentRole.toString());
                 }
             }
+
             if (appendEntriesArgs.term < currentTerm) {
                 success = false;
             } else if (conflictPrevLog(appendEntriesArgs)) {
-//                if (append_debug) {
-//                    System.out.printf("Conflict on server %d. prevLogIndex = %d, log.size = %d prevLogTerm = %d\n",
-//                            id, appendEntriesArgs.prevLogIndex, log.size(), appendEntriesArgs.prevLogTerm);
-//                    System.out.printf("[conflict] Server %d log: %s\n", id, log.toString());
-//                }
                 success = false;
                 receiveHeartBeat();
                 updateTerm(appendEntriesArgs.term);
@@ -179,7 +175,8 @@ public class RaftNode implements MessageHandling {
                                 id, currentTerm, appendEntriesArgs.leaderId, appendEntriesArgs.term, appendEntriesArgs.prevLogIndex + 1,
                                 currentRole.toString());
                     }
-                    // If existing entry conflicts with the new one, delete all following entries.
+
+                    /* If existing entry conflicts with the new one, delete all following entries. */
                     LogEntry lastEntry = getLastEntry();
                     while (lastEntry != null && lastEntry.index > appendEntriesArgs.prevLogIndex) {
                         if (append_debug)
@@ -189,11 +186,11 @@ public class RaftNode implements MessageHandling {
                         lastEntry = getLastEntry();
                     }
 
-                    // Update log
+                    /* Update log */
                     log.addAll(appendEntriesArgs.entries);
                 }
 
-                // Commit logs according to leader's commitIndex.
+                /* Commit logs according to leader's commitIndex. */
                 if (appendEntriesArgs.leaderCommit > commitIndex) {
                     int oldCommitIndex = commitIndex;
                     commitIndex = Integer.min(appendEntriesArgs.leaderCommit, log.size());
@@ -245,14 +242,6 @@ public class RaftNode implements MessageHandling {
         }
     }
 
-    private LogEntry getPrevLogEntry() {
-        if (log == null || log.size() <= 1) {
-            return new LogEntry(0, 0, -1);
-        } else {
-            return log.get(log.size() - 2);
-        }
-    }
-
     private boolean isCandidate() {
         return currentRole.equals(NodeRole.Candidate);
     }
@@ -266,6 +255,7 @@ public class RaftNode implements MessageHandling {
         if (debug || count_debug)
             System.out.printf("Server %d becomes a leader at term %d.", id, currentTerm);
 
+        /* Set up heart beat timer. */
         heartBeatTimer = new Timer();
         heartBeatTimer.scheduleAtFixedRate(new TimerTask() {
             @Override
@@ -274,9 +264,10 @@ public class RaftNode implements MessageHandling {
             }
         }, 0, heartBeatFreq);
 
+        /* Re-initialize send thread list. */
         sendThreadList = new ArrayList<>();
 
-        // Reinitialize nextIndex and matchIndex
+        /* Reinitialize nextIndex and matchIndex */
         nextIndex = new int[num_peers];
         matchIndex = new int[num_peers];
         for (int i = 0; i < num_peers; i++) {
@@ -299,6 +290,9 @@ public class RaftNode implements MessageHandling {
         this.sendThreadList = new ArrayList<>();
     }
 
+    /**
+     * Send heartbeat to all the followers.
+     */
     private void broadcastHeartBeat() {
         LogEntry lastLogEntry = getLastEntry();
         AppendEntriesArgs appendEntriesArgs = new AppendEntriesArgs(currentTerm, id, lastLogEntry.index,
@@ -319,15 +313,21 @@ public class RaftNode implements MessageHandling {
         }
     }
 
+    /**
+     * Send AppendEntry message to all the followers in parallel.
+     */
     private void broadcastAppendEntriesInParallel() {
         int currentIndex = getLastEntry().index;
         SuccessListener successListener = new SuccessListener(currentIndex);
         List<LogEntry> logCopy = new ArrayList<>(log);
 
+        /* Stop sending thread for preceding logs. */
         for (SendAppendThread thread : sendThreadList) {
             thread.stopThread();
         }
         sendThreadList = new ArrayList<>();
+
+        /* Start a new sending thread for each follower. */
         for (int i = 0; i < num_peers; i++) {
             if (i == id) continue;
             SendAppendThread sendThread = new SendAppendThread(i, currentIndex, successListener, logCopy);
@@ -335,6 +335,7 @@ public class RaftNode implements MessageHandling {
             sendThreadList.add(sendThread);
         }
         long waitStartTime = System.currentTimeMillis();
+
         /* Blocking until the log is committed or timeout. */
         while (!successListener.isCommitted() && (System.currentTimeMillis() - waitStartTime) < MAX_ELECTION_TIMEOUT);
         if (append_debug)
@@ -390,6 +391,9 @@ public class RaftNode implements MessageHandling {
         }
     }
 
+    /**
+     * A helper function to convert an Object to a byte array for serializing an object.
+     */
     private static byte[] convertObjectToByteArray(Object object) {
         ByteArrayOutputStream  byteStream = new ByteArrayOutputStream();
         try {
@@ -402,6 +406,9 @@ public class RaftNode implements MessageHandling {
         return byteStream.toByteArray();
     }
 
+    /**
+     * A helper function to convert a byte array to an Object for de-serializing an object.
+     */
     private static Object convertByteArrayToObject(byte[] bytes) {
         ByteArrayInputStream byteStream = new ByteArrayInputStream(bytes);
         Object object = null;
@@ -425,6 +432,11 @@ public class RaftNode implements MessageHandling {
         }
     }
 
+    /**
+     * Thread for sending AppendEntry messages to one follower.
+     * If the follower is down, or leader cannot get response, the leader would try endlessly.
+     * If the append message is conflict with the follower's log, decrease nextIndex by 1 and continue to try.
+     */
     private class SendAppendThread implements Runnable {
         private int followerId;
         private int currentIndex;
@@ -447,9 +459,6 @@ public class RaftNode implements MessageHandling {
             nextIndex[this.followerId] = Integer.min(nextIndex[this.followerId], currentIndex);
             while (!this.isStopped) {
                 List<LogEntry> entries = new ArrayList<>();
-//                if (append_debug)
-//                    System.out.printf("Follower server %d's nextIndex on server %d is %d [currentIndex=%d] [logsize=%d] %s\n",
-//                            this.followerId, id, nextIndex[this.followerId], currentIndex, logCopy.size(), logCopy.toString());
                 entries.addAll(logCopy.subList(Integer.max(0, nextIndex[this.followerId] - 1), currentIndex));
                 int prevLogTerm = (nextIndex[this.followerId] >= 2) ? logCopy.get(nextIndex[this.followerId] - 2).term : 0;
                 AppendEntriesArgs appendEntriesArgs = new AppendEntriesArgs(currentTerm, id,
@@ -460,8 +469,6 @@ public class RaftNode implements MessageHandling {
                     Message response = lib.sendMessage(message);
                     if (response != null) {
                         AppendEntriesReply reply = (AppendEntriesReply) convertByteArrayToObject(response.getBody());
-//                        System.out.printf("Server %d receives reply(%d) from server %d at term %d.\n",
-//                                reply.success, this.followerId, reply.term);
                         if (reply.success) {
                             if (append_debug)
                                 System.out.printf("Server %d receives success from server %d at term %d (%d times).\n",
@@ -489,6 +496,10 @@ public class RaftNode implements MessageHandling {
         }
     }
 
+    /**
+     * Listener for AppendEntry success response.
+     * Count the number of success replies, commit the corresponding entry if reach an agreement.
+     */
     private class SuccessListener {
         private int index;
         private int successCounter = 1;
