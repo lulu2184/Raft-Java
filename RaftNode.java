@@ -26,7 +26,7 @@ public class RaftNode implements MessageHandling {
     private Timer electionTimer;
     private Timer heartBeatTimer;
 
-    private int[] nextIndex;
+    private Integer[] nextIndex;
     private int[] matchIndex;
 
     private boolean hasHeartBeat;
@@ -196,8 +196,10 @@ public class RaftNode implements MessageHandling {
                     commitIndex = Integer.min(appendEntriesArgs.leaderCommit, log.size());
                     for (int i = oldCommitIndex; i < commitIndex; i++) {
                         try {
-                            if (append_debug)
+                            if (append_debug) {
                                 System.out.printf("Server %d commits log at %d (value = %d)\n", id, log.get(i).index, log.get(i).value);
+                                System.out.printf("Server %d log: %s\n", id, log.toString());
+                            }
                             lib.applyChannel(new ApplyMsg(id, log.get(i).index, log.get(i).value, false, null));
                         } catch (RemoteException e) {
                             e.printStackTrace();
@@ -268,7 +270,7 @@ public class RaftNode implements MessageHandling {
         sendThreadList = new ArrayList<>();
 
         /* Reinitialize nextIndex and matchIndex */
-        nextIndex = new int[num_peers];
+        nextIndex = new Integer[num_peers];
         matchIndex = new int[num_peers];
         for (int i = 0; i < num_peers; i++) {
             nextIndex[i] = getLastEntry().index + 1;
@@ -458,13 +460,18 @@ public class RaftNode implements MessageHandling {
 
         @Override
         public void run() {
-            nextIndex[this.followerId] = Integer.min(nextIndex[this.followerId], currentIndex);
+            synchronized (nextIndex[this.followerId]) {
+                nextIndex[this.followerId] = Integer.min(nextIndex[this.followerId], currentIndex);
+            }
             while (!this.isStopped && isLeader()) {
                 List<LogEntry> entries = new ArrayList<>();
-                entries.addAll(logCopy.subList(Integer.max(0, nextIndex[this.followerId] - 1), currentIndex));
-                int prevLogTerm = (nextIndex[this.followerId] >= 2) ? logCopy.get(nextIndex[this.followerId] - 2).term : 0;
-                AppendEntriesArgs appendEntriesArgs = new AppendEntriesArgs(this.currentTerm, id,
-                        nextIndex[this.followerId] - 1, prevLogTerm, entries, commitIndex);
+                AppendEntriesArgs appendEntriesArgs;
+                synchronized (nextIndex[this.followerId]) {
+                    entries.addAll(logCopy.subList(Integer.max(0, nextIndex[this.followerId] - 1), currentIndex));
+                    int prevLogTerm = (nextIndex[this.followerId] >= 2) ? logCopy.get(nextIndex[this.followerId] - 2).term : 0;
+                    appendEntriesArgs = new AppendEntriesArgs(this.currentTerm, id,
+                            nextIndex[this.followerId] - 1, prevLogTerm, entries, commitIndex);
+                }
                 Message message = new Message(
                         MessageType.AppendEntriesArgs, id, followerId, convertObjectToByteArray(appendEntriesArgs));
                 try {
@@ -476,13 +483,17 @@ public class RaftNode implements MessageHandling {
                                 System.out.printf("Server %d receives success from server %d at term %d (%d times).\n",
                                         id, this.followerId, reply.term, ++counter);
                             successListener.onSuccess();
-                            nextIndex[this.followerId]++;
+                            synchronized (nextIndex[this.followerId]) {
+                                nextIndex[this.followerId]++;
+                            }
                             return;
                         } else {
                             if (reply.term > currentTerm) {
                                 updateTerm(reply.term);
                             } else {
-                                nextIndex[this.followerId]--;
+                                synchronized (nextIndex[this.followerId]) {
+                                    nextIndex[this.followerId]--;
+                                }
                             }
                         }
                     }
