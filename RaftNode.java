@@ -516,7 +516,7 @@ public class RaftNode implements MessageHandling {
 
         private void onSuccess() {
             synchronized (this) {
-                if (isCommitted || !isLeader()) return;
+                if (isCommitted) return;
                 successCounter++;
                 if (successCounter > num_peers / 2) {
                     commitIndex = index;
