@@ -9,7 +9,7 @@ public class RaftNode implements MessageHandling {
     private static int MAX_ELECTION_TIMEOUT = 600;
     private static int MIN_ELECTION_TIMEOUT = 300;
     private static boolean debug = false;
-    private static boolean append_debug = false;
+    private static boolean append_debug = true;
     private static boolean count_debug = false;
     private static Random random = new Random();
 
@@ -308,7 +308,7 @@ public class RaftNode implements MessageHandling {
                         updateTerm(appendReply.term);
                 }
             } catch (RemoteException e) {
-                System.err.printf("Server %d fails to send AppendEntries to server %d.\n", id, i);
+                System.err.printf("[Remote Exception] Server %d fails to send AppendEntries to server %d.\n", id, i);
             }
         }
     }
@@ -330,7 +330,7 @@ public class RaftNode implements MessageHandling {
         /* Start a new sending thread for each follower. */
         for (int i = 0; i < num_peers; i++) {
             if (i == id) continue;
-            SendAppendThread sendThread = new SendAppendThread(i, currentIndex, successListener, logCopy);
+            SendAppendThread sendThread = new SendAppendThread(i, currentIndex, currentTerm, successListener, logCopy);
             (new Thread(sendThread)).start();
             sendThreadList.add(sendThread);
         }
@@ -378,7 +378,7 @@ public class RaftNode implements MessageHandling {
                     if (reply.voteGranted) votesCounter++;
                 }
             } catch (RemoteException e){
-                System.err.printf("Server %d fails to send RequestVote to server %d at term %d.\n", id, i, currentTerm);
+                System.err.printf("[Remote Exception] Server %d fails to send RequestVote to server %d at term %d.\n", id, i, currentTerm);
             } catch (ClassCastException e) {
                 e.printStackTrace();
             }
@@ -444,24 +444,26 @@ public class RaftNode implements MessageHandling {
         private SuccessListener successListener;
         private int counter = 0;
         private List<LogEntry> logCopy;
+        private int currentTerm;
 
-        private SendAppendThread(int followerId, int currentIndex, SuccessListener successListener,
+        private SendAppendThread(int followerId, int currentIndex, int currentTerm, SuccessListener successListener,
                                  List<LogEntry> logCopy) {
             this.followerId = followerId;
             this.currentIndex = currentIndex;
             this.isStopped = false;
             this.successListener = successListener;
             this.logCopy = logCopy;
+            this.currentTerm = currentTerm;
         }
 
         @Override
         public void run() {
             nextIndex[this.followerId] = Integer.min(nextIndex[this.followerId], currentIndex);
-            while (!this.isStopped) {
+            while (!this.isStopped && isLeader()) {
                 List<LogEntry> entries = new ArrayList<>();
                 entries.addAll(logCopy.subList(Integer.max(0, nextIndex[this.followerId] - 1), currentIndex));
                 int prevLogTerm = (nextIndex[this.followerId] >= 2) ? logCopy.get(nextIndex[this.followerId] - 2).term : 0;
-                AppendEntriesArgs appendEntriesArgs = new AppendEntriesArgs(currentTerm, id,
+                AppendEntriesArgs appendEntriesArgs = new AppendEntriesArgs(this.currentTerm, id,
                         nextIndex[this.followerId] - 1, prevLogTerm, entries, commitIndex);
                 Message message = new Message(
                         MessageType.AppendEntriesArgs, id, followerId, convertObjectToByteArray(appendEntriesArgs));
@@ -514,7 +516,7 @@ public class RaftNode implements MessageHandling {
 
         private void onSuccess() {
             synchronized (this) {
-                if (isCommitted) return;
+                if (isCommitted || !isLeader()) return;
                 successCounter++;
                 if (successCounter > num_peers / 2) {
                     commitIndex = index;
